@@ -2,7 +2,7 @@
 title: Kryptrix
 emoji: 💹
 colorFrom: blue
-colorTo: cyan
+colorTo: green
 sdk: streamlit
 sdk_version: "1.49.1"
 app_file: app.py
@@ -61,6 +61,7 @@ Visit the live demo: kryptrix.1fahadshah.com
 
 ## Project Structure
 
+```
 kryptrix/
 ├── core/ # Backend logic and analytics
 ├── dashboard/ # Streamlit UI pages
@@ -72,6 +73,7 @@ kryptrix/
 ├── requirements.txt
 ├── Dockerfile
 └── README.md
+```
 
 ## Deployment
 
