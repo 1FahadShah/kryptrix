@@ -28,7 +28,7 @@ jobs:
           echo "Running basic unit tests..."
           python -m unittest discover -s tests
 
-      - name: Deploy to Hugging Face
+      - name: Deploy to Hugging Face Space
         run: |
           git remote remove hf || true
           git remote add hf https://1FahadShah:${{ secrets.KRYPTRIX_SPACE_REPO_SYNC }}@huggingface.co/spaces/1FahadShah/kryptrix
