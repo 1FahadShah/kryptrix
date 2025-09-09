@@ -31,7 +31,5 @@ jobs:
       - name: Deploy to Hugging Face
         run: |
           git remote remove hf || true
-          git remote add hf https://$HF_TOKEN@huggingface.co/spaces/1FahadShah/kryptrix
+          git remote add hf https://1FahadShah:${{ secrets.KRYPTRIX_SPACE_REPO_SYNC }}@huggingface.co/spaces/1FahadShah/kryptrix
           git push hf main
-        env:
-          HF_TOKEN: ${{ secrets.KRYPTRIX_SPACE_REPO_SYNC }}
