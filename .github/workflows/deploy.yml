@@ -16,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v2
         with:
-          python-version: "3.11" # Update if you need newer features
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -30,7 +30,8 @@ jobs:
 
       - name: Deploy to Hugging Face
         run: |
-          git remote add hf https://huggingface.co/spaces/1FahadShah/kryptrix
+          git remote remove hf || true
+          git remote add hf https://$HF_TOKEN@huggingface.co/spaces/1FahadShah/kryptrix
           git push hf main
         env:
           HF_TOKEN: ${{ secrets.KRYPTRIX_SPACE_REPO_SYNC }}
