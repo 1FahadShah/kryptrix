@@ -34,4 +34,4 @@ jobs:
           git remote add hf https://1FahadShah:${{ secrets.KRYPTRIX_SPACE_REPO_SYNC }}@huggingface.co/spaces/1FahadShah/kryptrix
           git fetch hf
           git reset --hard hf/main
-          git push hf main
+          git push hf main --force
