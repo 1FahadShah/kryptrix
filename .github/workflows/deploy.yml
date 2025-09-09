@@ -10,26 +10,47 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
+      # ✅ Step 1: Checkout full history (important for Hugging Face)
+      - name: Checkout full history
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
 
+      # ✅ Step 2: Set up Python
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
           python-version: "3.11"
 
+      # ✅ Step 3: Install dependencies
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # ✅ Step 4: Run tests
       - name: Run tests
         run: |
           echo "Running basic unit tests..."
           python -m unittest discover -s tests
 
+      # ✅ Step 5: Configure Git safely
+      - name: Configure Git user
+        run: |
+          git config --global user.email "deploy@githubactions.com"
+          git config --global user.name "GitHub Actions"
+
+      # ✅ Step 6: Sync & Deploy to Hugging Face
       - name: Deploy to Hugging Face Space 🚀
         run: |
           git remote remove hf || true
           git remote add hf https://1FahadShah:${{ secrets.KRYPTRIX_SPACE_REPO_SYNC }}@huggingface.co/spaces/1FahadShah/kryptrix
+
+          # ✅ Fetch Hugging Face history
+          git fetch hf
+
+          # ✅ Rebase GitHub changes on top of Hugging Face main
+          git pull hf main --rebase || true
+
+          # ✅ Force push safely
           git push hf main --force
