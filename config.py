@@ -36,4 +36,4 @@ MAX_CONCURRENT_REQUESTS = 10  # Throttling semaphore limit
 # API Endpoints
 BINANCE_API_URL = "https://api.binance.com/api/v3"
 COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
-UNISWAP_V3_SUBGRAPH_URL = "https://api.thegraph.com/subgraphs/id/0xed93b2ea13291fb4689232322a46c1e5b228b348"
+UNISWAP_V3_SUBGRAPH_URL = "https://gateway-mainnet.network.thegraph.com/api/35630321521469085351478111953114/subgraphs/id/0x9bde7bf4d5b130c05342e71850165c27514a683a"
