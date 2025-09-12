@@ -13,7 +13,7 @@ from config import DB_PATH, TOKENS
 
 # --- CONFIGURATION ---
 DATA_LOOKBACK_HOURS = 72
-ARBITRAGE_THRESHOLD = 0.01  # 1%
+ARBITRAGE_THRESHOLD = 0.001  # 0.1%
 
 # --- DATABASE HELPERS ---
 def get_db_connection():
