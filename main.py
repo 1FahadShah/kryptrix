@@ -6,9 +6,21 @@ from core.analytics import run_analytics
 from database.database_setup import initialize_db
 
 # --- CONFIGURATION ---
-# The interval in seconds to wait between each full run of the data pipeline.
-# 60 seconds is a safe bet to stay under free API rate limits.
-RUN_INTERVAL_SECONDS = 60
+RUN_INTERVAL_SECONDS = 15
+
+# --- NEW HELPER FUNCTION ---
+def live_countdown(duration_seconds: int):
+    """
+    Displays a live, overwriting countdown in the terminal for the specified duration.
+    """
+    for i in range(duration_seconds, 0, -1):
+        # The \r moves the cursor to the beginning of the line.
+        # The end="" prevents print from adding a new line.
+        # Padding with spaces ensures the previous line is fully overwritten.
+        print(f"Next run in {i} seconds...          \r", end="")
+        time.sleep(1)
+    # Print a blank line to clear the countdown text at the end
+    print(" " * 40, end="\r")
 
 async def main_loop():
     """
@@ -35,10 +47,12 @@ async def main_loop():
         run_analytics()
         print("Analytics engine run complete.")
 
-        # --- Wait for the next run ---
-        print(f"--- Pipeline run finished. Waiting for {RUN_INTERVAL_SECONDS} seconds... ---")
+        # --- Wait for the next run with a live countdown ---
+        print(f"--- Pipeline run finished. ---")
+        print("===========================================")
+        live_countdown(RUN_INTERVAL_SECONDS) # <--- UPDATED CALL
+
         print("-" * 30)
-        time.sleep(RUN_INTERVAL_SECONDS)
 
 if __name__ == "__main__":
     try:
