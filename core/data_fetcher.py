@@ -3,7 +3,7 @@ import asyncio
 import httpx
 import sqlite3
 from sqlite3 import Error
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from typing import Dict, List, Optional
 import sys
@@ -80,7 +80,7 @@ def get_token_id(conn: sqlite3.Connection, symbol: str) -> int:
 # ---------------- Fetch Helpers ----------------
 async def fetch_with_retry(client: httpx.AsyncClient, url: str, source_name: str, method="GET", payload=None):
     for attempt in range(1, MAX_RETRIES + 1):
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         try:
             if method.upper() == "POST":
                 resp = await client.post(url, json=payload, timeout=10.0)
@@ -88,18 +88,18 @@ async def fetch_with_retry(client: httpx.AsyncClient, url: str, source_name: str
                 resp = await client.get(url, timeout=10.0)
 
             resp.raise_for_status()
-            elapsed_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+            elapsed_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
             return resp.json(), elapsed_ms
         except httpx.HTTPStatusError as e:
             error_message = f"HTTP Error: {e.response.status_code} for URL: {e.request.url}"
             print(f"[{source_name} ATTEMPT {attempt}/{MAX_RETRIES}] {error_message}")
             if attempt == MAX_RETRIES:
-                return {"error": error_message, "raw_response": e.response.text}, (datetime.utcnow() - start_time).total_seconds() * 1000
+                return {"error": error_message, "raw_response": e.response.text}, (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
         except Exception as e:
             error_message = str(e)
             print(f"[{source_name} ATTEMPT {attempt}/{MAX_RETRIES}] General Error: {error_message}")
             if attempt == MAX_RETRIES:
-                 return {"error": error_message}, (datetime.utcnow() - start_time).total_seconds() * 1000
+                 return {"error": error_message}, (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
 
         await asyncio.sleep(RETRY_DELAY)
 
