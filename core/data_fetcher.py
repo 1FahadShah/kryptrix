@@ -147,9 +147,6 @@ async def fetch_eth_usd(client: httpx.AsyncClient, semaphore: asyncio.Semaphore)
 
 async def fetch_uniswap_v3(client: httpx.AsyncClient, token: Dict, conn: sqlite3.Connection, eth_usd: float, semaphore: asyncio.Semaphore):
     async with semaphore:
-        # For Uniswap, we typically need to find pools against WETH or a stablecoin.
-        # This query looks for the token against any other token, ordered by liquidity.
-        # It's a simplification; a robust solution would be more complex.
         query = {
             "query": f"""
             {{
@@ -175,25 +172,31 @@ async def fetch_uniswap_v3(client: httpx.AsyncClient, token: Dict, conn: sqlite3
         }
 
         data, elapsed_ms = await fetch_with_retry(client, UNISWAP_V3_SUBGRAPH_URL, "UniswapV3", method="POST", payload=query)
+
         try:
             token_id = get_token_id(conn, token["symbol"])
             if "error" not in data and data.get("data", {}).get("pools"):
                 pools = data["data"]["pools"]
-                # A simple strategy: find the first pool and derive price.
-                # A better strategy would be to check if the pair is with WETH/USDC.
+                if not pools:
+                    # This handles cases where the API returns an empty pool list
+                    raise ValueError(f"No pools found for {token['symbol']} in Uniswap response.")
+
                 pool = pools[0]
-                price_usd = 0
+                price_usd = 0.0
+
                 if pool['token0']['symbol'].upper() in [token['symbol'], 'W'+token['symbol']]:
                     price_usd = float(pool['token0']['derivedETH']) * eth_usd
-                else:
+                elif pool['token1']['symbol'].upper() in [token['symbol'], 'W'+token['symbol']]:
                     price_usd = float(pool['token1']['derivedETH']) * eth_usd
+                else:
+                    raise ValueError("Could not determine price from pool.")
 
                 volume_usd = float(pool["volumeUSD"])
                 insert_price(conn, token_id, "UniswapV3", price_usd, volume_usd, data)
                 log_api_health(conn, "UniswapV3", "success", elapsed_ms, None, data)
             else:
-                error_msg = data.get("error", "No pools found or data error")
-                log_api_health(conn, "UniswapV3", "error", elapsed_ms, error_msg, data.get("raw_response"))
+                error_msg = data.get("errors", [{}])[0].get("message", f"No pools found or data error for {token['symbol']}")
+                log_api_health(conn, "UniswapV3", "error", elapsed_ms, error_msg, data)
 
         except Exception as e:
             log_api_health(conn, "UniswapV3", "error", elapsed_ms, str(e))
@@ -207,19 +210,17 @@ async def fetch_all_prices(tokens: List[Dict] = TOKENS):
         return
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
-    async with httpx.AsyncClient() as client:
-        # Fetch ETH price first as it's a dependency for Uniswap
+    async with httpx.AsyncClient(follow_redirects=True) as client:
         eth_usd = await fetch_eth_usd(client, semaphore)
 
         tasks = []
         for token in tokens:
-            # Add each fetching task to the list
             if token.get("binance_id"):
                 tasks.append(fetch_binance(client, token, conn, semaphore))
             if token.get("coingecko_id"):
                 tasks.append(fetch_coingecko(client, token, conn, semaphore))
-            if token.get("uniswap_id") and token['symbol'] != 'ETH': # Don't fetch ETH against itself on Uniswap
-                 tasks.append(fetch_uniswap_v3(client, token, conn, eth_usd, semaphore))
+            if token.get("uniswap_id") and token['symbol'] != 'ETH':
+                tasks.append(fetch_uniswap_v3(client, token, conn, eth_usd, semaphore))
 
         print(f"Starting to fetch data for {len(tasks)} tasks...")
         results = await asyncio.gather(*tasks, return_exceptions=True)
