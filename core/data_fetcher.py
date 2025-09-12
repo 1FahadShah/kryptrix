@@ -5,37 +5,30 @@ import sqlite3
 from sqlite3 import Error
 from datetime import datetime
 import json
-import os
 from typing import Dict, List, Optional
+import sys
+import os
 
-# ---------------- Database Config ----------------
-DB_DIR = "database"
-DB_PATH = os.path.join(DB_DIR, "kryptrix.db")
+# Add project root to the Python path to allow importing from config
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# ---------------- Token Config ----------------
-TOKENS = [
-    {
-        "symbol": "BTC",
-        "name": "Bitcoin",
-        "binance_id": "BTCUSDT",
-        "coingecko_id": "bitcoin",
-        "uniswap_id": "0x123..."
-    },
-    {
-        "symbol": "ETH",
-        "name": "Ethereum",
-        "binance_id": "ETHUSDT",
-        "coingecko_id": "ethereum",
-        "uniswap_id": "0x456..."
-    },
-]
-
-MAX_RETRIES = 3
-RETRY_DELAY = 2  # seconds
-MAX_CONCURRENT_REQUESTS = 10  # throttling semaphore
+# Import configurations from the central config file
+from config import (
+    DB_PATH,
+    TOKENS,
+    MAX_RETRIES,
+    RETRY_DELAY,
+    MAX_CONCURRENT_REQUESTS,
+    BINANCE_API_URL,
+    COINGECKO_API_URL,
+    UNISWAP_V3_SUBGRAPH_URL,
+)
 
 # ---------------- Database Helpers ----------------
 def create_connection(db_path=DB_PATH) -> Optional[sqlite3.Connection]:
+    # This function is now slightly redundant with database_setup.py,
+    # but it's fine to keep it here for this module's self-sufficiency.
+    # In a larger app, you might create a shared db connection manager.
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     try:
         conn = sqlite3.connect(db_path)
@@ -45,16 +38,19 @@ def create_connection(db_path=DB_PATH) -> Optional[sqlite3.Connection]:
         print(f"[DB ERROR] {e}")
         return None
 
-def insert_price(conn: sqlite3.Connection, token_id: int, price_usd: float, volume_24h: float, raw_data: dict):
+def insert_price(conn: sqlite3.Connection, token_id: int, source: str, price_usd: float, volume_24h: float, raw_data: dict):
+    # Added 'source' to the prices table to track where the data came from
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO prices (token_id, price_usd, volume_24h, raw_data) VALUES (?, ?, ?, ?)",
-            (token_id, price_usd, volume_24h, json.dumps(raw_data))
+            "INSERT INTO prices (token_id, source, price_usd, volume_24h, raw_data) VALUES (?, ?, ?, ?, ?)",
+            (token_id, source, price_usd, volume_24h, json.dumps(raw_data))
         )
         conn.commit()
     except Error as e:
         print(f"[DB INSERT ERROR] {e}")
+
+# The rest of the database helpers (log_api_health, get_token_id) remain the same...
 
 def log_api_health(conn: sqlite3.Connection, source: str, status: str, response_time_ms: float = None,
                    error_message: str = None, raw_data: dict = None):
@@ -75,10 +71,11 @@ def get_token_id(conn: sqlite3.Connection, symbol: str) -> int:
         result = cursor.fetchone()
         if result:
             return result[0]
-        raise ValueError(f"Token {symbol} not found in DB.")
+        raise ValueError(f"Token {symbol} not found in DB. Did you run scripts/seed_db.py?")
     except Error as e:
         print(f"[DB GET TOKEN ERROR] {e}")
         raise
+
 
 # ---------------- Fetch Helpers ----------------
 async def fetch_with_retry(client: httpx.AsyncClient, url: str, source_name: str, method="GET", payload=None):
@@ -89,122 +86,164 @@ async def fetch_with_retry(client: httpx.AsyncClient, url: str, source_name: str
                 resp = await client.post(url, json=payload, timeout=10.0)
             else:
                 resp = await client.get(url, timeout=10.0)
+
             resp.raise_for_status()
             elapsed_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
             return resp.json(), elapsed_ms
+        except httpx.HTTPStatusError as e:
+            error_message = f"HTTP Error: {e.response.status_code} for URL: {e.request.url}"
+            print(f"[{source_name} ATTEMPT {attempt}/{MAX_RETRIES}] {error_message}")
+            if attempt == MAX_RETRIES:
+                return {"error": error_message, "raw_response": e.response.text}, (datetime.utcnow() - start_time).total_seconds() * 1000
         except Exception as e:
-            elapsed_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
-            if attempt < MAX_RETRIES:
-                await asyncio.sleep(RETRY_DELAY)
-            else:
-                return {"error": str(e)}, elapsed_ms
+            error_message = str(e)
+            print(f"[{source_name} ATTEMPT {attempt}/{MAX_RETRIES}] General Error: {error_message}")
+            if attempt == MAX_RETRIES:
+                 return {"error": error_message}, (datetime.utcnow() - start_time).total_seconds() * 1000
+
+        await asyncio.sleep(RETRY_DELAY)
+
 
 # ---------------- Exchange Fetchers ----------------
 async def fetch_binance(client: httpx.AsyncClient, token: Dict, conn: sqlite3.Connection, semaphore: asyncio.Semaphore):
     async with semaphore:
-        data, elapsed_ms = await fetch_with_retry(client, f"https://api.binance.com/api/v3/ticker/24hr?symbol={token['binance_id']}", "Binance")
+        url = f"{BINANCE_API_URL}/ticker/24hr?symbol={token['binance_id']}"
+        data, elapsed_ms = await fetch_with_retry(client, url, "Binance")
         try:
             token_id = get_token_id(conn, token["symbol"])
             if "error" not in data:
-                insert_price(conn, token_id, float(data["lastPrice"]), float(data["volume"]), data)
+                insert_price(conn, token_id, "Binance", float(data["lastPrice"]), float(data["quoteVolume"]), data)
                 log_api_health(conn, "Binance", "success", elapsed_ms, None, data)
             else:
-                log_api_health(conn, "Binance", "error", elapsed_ms, data["error"])
+                log_api_health(conn, "Binance", "error", elapsed_ms, data["error"], data.get("raw_response"))
         except Exception as e:
             log_api_health(conn, "Binance", "error", elapsed_ms, str(e))
         return data
 
 async def fetch_coingecko(client: httpx.AsyncClient, token: Dict, conn: sqlite3.Connection, semaphore: asyncio.Semaphore):
     async with semaphore:
-        data, elapsed_ms = await fetch_with_retry(
-            client,
-            f"https://api.coingecko.com/api/v3/simple/price?ids={token['coingecko_id']}&vs_currencies=usd&include_24hr_vol=true",
-            "CoinGecko"
-        )
+        url = f"{COINGECKO_API_URL}/simple/price?ids={token['coingecko_id']}&vs_currencies=usd&include_24hr_vol=true"
+        data, elapsed_ms = await fetch_with_retry(client, url, "CoinGecko")
         try:
             token_id = get_token_id(conn, token["symbol"])
             if "error" not in data and token["coingecko_id"] in data:
-                price = data[token["coingecko_id"]]["usd"]
-                volume = data[token["coingecko_id"]]["usd_24h_vol"]
-                insert_price(conn, token_id, price, volume, data)
+                price_data = data[token["coingecko_id"]]
+                insert_price(conn, token_id, "CoinGecko", price_data["usd"], price_data["usd_24h_vol"], data)
                 log_api_health(conn, "CoinGecko", "success", elapsed_ms, None, data)
             else:
-                log_api_health(conn, "CoinGecko", "error", elapsed_ms, data.get("error", "Missing token data"))
+                error_msg = data.get("error", "Token data not found in response")
+                log_api_health(conn, "CoinGecko", "error", elapsed_ms, error_msg, data.get("raw_response"))
         except Exception as e:
             log_api_health(conn, "CoinGecko", "error", elapsed_ms, str(e))
         return data
 
 async def fetch_eth_usd(client: httpx.AsyncClient, semaphore: asyncio.Semaphore) -> float:
     async with semaphore:
-        data, _ = await fetch_with_retry(client, "https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT", "Binance-ETH")
+        url = f"{BINANCE_API_URL}/ticker/price?symbol=ETHUSDT"
+        data, _ = await fetch_with_retry(client, url, "Binance-ETH")
         if "price" in data:
             return float(data["price"])
-        return 2000.0  # fallback
+        return 2000.0  # Fallback
 
 async def fetch_uniswap_v3(client: httpx.AsyncClient, token: Dict, conn: sqlite3.Connection, eth_usd: float, semaphore: asyncio.Semaphore):
     async with semaphore:
+        # For Uniswap, we typically need to find pools against WETH or a stablecoin.
+        # This query looks for the token against any other token, ordered by liquidity.
+        # It's a simplification; a robust solution would be more complex.
         query = {
             "query": f"""
             {{
-              pools(first: 1, orderBy: totalValueLockedUSD, orderDirection: desc,
-                    where: {{ token0: "{token['uniswap_id'].lower()}" }}) {{
-                token0Price
-                token1Price
-                volumeUSD
-              }}
+                pools(
+                    first: 5,
+                    orderBy: totalValueLockedUSD,
+                    orderDirection: desc,
+                    where: {{
+                        or: [
+                            {{ token0: "{token['uniswap_id'].lower()}" }},
+                            {{ token1: "{token['uniswap_id'].lower()}" }}
+                        ]
+                    }}
+                ) {{
+                    token0 {{ symbol, derivedETH }}
+                    token1 {{ symbol, derivedETH }}
+                    volumeUSD
+                    token0Price
+                    token1Price
+                }}
             }}
             """
         }
-        start_time = datetime.utcnow()
+
+        data, elapsed_ms = await fetch_with_retry(client, UNISWAP_V3_SUBGRAPH_URL, "UniswapV3", method="POST", payload=query)
         try:
-            resp = await client.post(
-                "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3",
-                json=query,
-                timeout=10.0
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            elapsed_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
-
             token_id = get_token_id(conn, token["symbol"])
-            pools = data.get("data", {}).get("pools", [])
-            if not pools:
-                log_api_health(conn, "UniswapV3", "error", elapsed_ms, "No pools found")
-                return {"error": "No pools found"}
+            if "error" not in data and data.get("data", {}).get("pools"):
+                pools = data["data"]["pools"]
+                # A simple strategy: find the first pool and derive price.
+                # A better strategy would be to check if the pair is with WETH/USDC.
+                pool = pools[0]
+                price_usd = 0
+                if pool['token0']['symbol'].upper() in [token['symbol'], 'W'+token['symbol']]:
+                    price_usd = float(pool['token0']['derivedETH']) * eth_usd
+                else:
+                    price_usd = float(pool['token1']['derivedETH']) * eth_usd
 
-            pool = pools[0]
-            derived_eth = float(pool.get("token1Price", 0))
-            volume_usd = float(pool.get("volumeUSD", 0))
-            price_usd = derived_eth * eth_usd
+                volume_usd = float(pool["volumeUSD"])
+                insert_price(conn, token_id, "UniswapV3", price_usd, volume_usd, data)
+                log_api_health(conn, "UniswapV3", "success", elapsed_ms, None, data)
+            else:
+                error_msg = data.get("error", "No pools found or data error")
+                log_api_health(conn, "UniswapV3", "error", elapsed_ms, error_msg, data.get("raw_response"))
 
-            insert_price(conn, token_id, price_usd, volume_usd, data)
-            log_api_health(conn, "UniswapV3", "success", elapsed_ms, None, data)
-            return data
         except Exception as e:
-            elapsed_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
             log_api_health(conn, "UniswapV3", "error", elapsed_ms, str(e))
-            return {"error": str(e)}
+        return data
 
 # ---------------- Runner ----------------
 async def fetch_all_prices(tokens: List[Dict] = TOKENS):
     conn = create_connection()
     if not conn:
-        print("Failed to connect to DB")
+        print("Failed to connect to DB. Fetcher cannot run.")
         return
 
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
     async with httpx.AsyncClient() as client:
+        # Fetch ETH price first as it's a dependency for Uniswap
         eth_usd = await fetch_eth_usd(client, semaphore)
+
         tasks = []
         for token in tokens:
-            tasks.append(fetch_binance(client, token, conn, semaphore))
-            tasks.append(fetch_coingecko(client, token, conn, semaphore))
-            tasks.append(fetch_uniswap_v3(client, token, conn, eth_usd, semaphore))
-        results = await asyncio.gather(*tasks)
+            # Add each fetching task to the list
+            if token.get("binance_id"):
+                tasks.append(fetch_binance(client, token, conn, semaphore))
+            if token.get("coingecko_id"):
+                tasks.append(fetch_coingecko(client, token, conn, semaphore))
+            if token.get("uniswap_id") and token['symbol'] != 'ETH': # Don't fetch ETH against itself on Uniswap
+                 tasks.append(fetch_uniswap_v3(client, token, conn, eth_usd, semaphore))
+
+        print(f"Starting to fetch data for {len(tasks)} tasks...")
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        print("All fetching tasks completed.")
 
     conn.close()
     return results
 
 # ---------------- Main ----------------
 if __name__ == "__main__":
+    print("Running data fetcher as a standalone script...")
+    # Add a column to prices table to track source
+    # This is a one-time migration. A better approach is using a migration tool.
+    try:
+        conn = create_connection()
+        conn.execute("ALTER TABLE prices ADD COLUMN source TEXT;")
+        conn.commit()
+        print("Added 'source' column to 'prices' table.")
+        conn.close()
+    except sqlite3.OperationalError:
+        # Column likely already exists, which is fine.
+        pass
+    except Exception as e:
+        print(f"Could not alter table: {e}")
+
     asyncio.run(fetch_all_prices())
+    print("Data fetcher run complete.")
