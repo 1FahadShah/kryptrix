@@ -24,8 +24,8 @@ def main():
 
     elif page == "Trading Analytics":
         st.title("💹 Trading Analytics")
-        # trading_view.render_trading_view() # We will uncomment this later
-        st.write("Trading Analytics View will be built here.")
+        trading_view.render_trading_view() # We will uncomment this later
+        #st.write("Trading Analytics View will be built here.")
 
     elif page == "Feature Simulator":
         st.title("🔬 Feature Simulator")
