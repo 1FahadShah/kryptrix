@@ -34,8 +34,8 @@ def main():
 
     elif page == "Stakeholder Reports":
         st.title("📄 Stakeholder Reports")
-        # stakeholder_view.render_stakeholder_view() # We will uncomment this later
-        st.write("Stakeholder Reports View will be built here.")
+        stakeholder_view.render_stakeholder_view() # We will uncomment this later
+        #st.write("Stakeholder Reports View will be built here.")
 
 if __name__ == "__main__":
     main()
