@@ -29,8 +29,8 @@ def main():
 
     elif page == "Feature Simulator":
         st.title("🔬 Feature Simulator")
-        # feature_view.render_feature_view() # We will uncomment this later
-        st.write("Feature Simulator View will be built here.")
+        feature_view.render_feature_view() # We will uncomment this later
+        #st.write("Feature Simulator View will be built here.")
 
     elif page == "Stakeholder Reports":
         st.title("📄 Stakeholder Reports")
