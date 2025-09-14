@@ -1,11 +1,12 @@
 # core/analytics.py
 import pandas as pd
-import ta # <--- NEW LIBRARY
+import ta  # <--- NEW LIBRARY
 import sqlite3
 import json
 import sys
 import os
 from datetime import datetime, timezone, timedelta
+import numpy as np
 
 # Add project root to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -14,6 +15,11 @@ from config import DB_PATH, TOKENS
 # --- CONFIGURATION ---
 DATA_LOOKBACK_HOURS = 72
 ARBITRAGE_THRESHOLD = 0.001  # 0.1%
+
+# --- NEW: Anomaly Detection Configuration ---
+ANOMALY_ZSCORE_WINDOW = 24  # Use the last 24 data points for Z-score calculation
+ANOMALY_ZSCORE_THRESHOLD = 3.0  # Z-score above this is a volume spike
+ANOMALY_PRICE_JUMP_THRESHOLD = 0.05  # 5% price change in one period is a price jump
 
 # --- DATABASE HELPERS ---
 def get_db_connection():
@@ -29,7 +35,6 @@ def get_token_id(conn, symbol):
 def insert_indicators(conn, token_id, indicators):
     """Inserts the latest calculated indicators into the database."""
     cursor = conn.cursor()
-    # Storing None for vwap and realized_vol for now
     cursor.execute("""
         INSERT INTO indicators (token_id, sma10, sma30, ema, rsi14, vwap24h, realized_vol, raw_data)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -39,8 +44,8 @@ def insert_indicators(conn, token_id, indicators):
         indicators.get('SMA_30'),
         indicators.get('EMA_14'),
         indicators.get('RSI_14'),
-        None, # VWAP temporarily removed
-        None, # Realized Volatility temporarily removed
+        None,  # VWAP temporarily removed
+        None,  # Realized Volatility temporarily removed
         json.dumps(indicators)
     ))
     conn.commit()
@@ -61,6 +66,22 @@ def insert_arbitrage(conn, token_id, opp):
     ))
     conn.commit()
 
+# --- NEW: Anomaly Insertion Helper ---
+def insert_anomaly(conn, token_id, anomaly):
+    """Inserts a detected anomaly into the database."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO anomalies (token_id, anomaly_type, value, description, raw_data)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        token_id,
+        anomaly['anomaly_type'],
+        anomaly['value'],
+        anomaly['description'],
+        json.dumps(anomaly)
+    ))
+    conn.commit()
+
 # --- ANALYTICS FUNCTIONS ---
 def calculate_technical_indicators(df: pd.DataFrame) -> dict:
     """Calculates a set of technical indicators using the 'ta' library."""
@@ -68,17 +89,12 @@ def calculate_technical_indicators(df: pd.DataFrame) -> dict:
         print("Warning: Not enough data points to calculate all indicators.")
         return {}
 
-    # Use the 'ta' library to calculate indicators
-    # It automatically finds the 'close' column
     df['SMA_10'] = ta.trend.sma_indicator(df['close'], window=10)
     df['SMA_30'] = ta.trend.sma_indicator(df['close'], window=30)
     df['EMA_14'] = ta.trend.ema_indicator(df['close'], window=14)
     df['RSI_14'] = ta.momentum.rsi(df['close'], window=14)
 
-    # Get the most recent indicator values
     latest_indicators = df.iloc[-1].to_dict()
-
-    # Clean up NaN values for JSON serialization
     return {k: v for k, v in latest_indicators.items() if pd.notna(v)}
 
 def detect_arbitrage(df: pd.DataFrame) -> list:
@@ -93,6 +109,9 @@ def detect_arbitrage(df: pd.DataFrame) -> list:
     for (idx_a, row_a), (idx_b, row_b) in itertools.combinations(latest.iterrows(), 2):
         price_a = row_a['price_usd']
         price_b = row_b['price_usd']
+
+        if price_a is None or price_b is None or price_a == 0 or price_b == 0:
+            continue
 
         price_diff = abs(price_a - price_b)
         percent_diff = price_diff / min(price_a, price_b)
@@ -115,6 +134,45 @@ def detect_arbitrage(df: pd.DataFrame) -> list:
             })
     return opportunities
 
+# --- NEW: Anomaly Detection Function ---
+def detect_anomalies(df: pd.DataFrame) -> list:
+    """Detects volume spikes and price jumps from time-series data."""
+    anomalies = []
+    df = df.sort_values('timestamp').reset_index(drop=True)
+
+    if df.empty:
+        return []
+
+    # Volume Spike Detection (Z-score)
+    if 'volume_24h' in df.columns and len(df) >= ANOMALY_ZSCORE_WINDOW:
+        rolling_window = df['volume_24h'].iloc[-ANOMALY_ZSCORE_WINDOW:]
+        mean = rolling_window.mean()
+        std = rolling_window.std()
+
+        if std > 0:
+            latest_volume = rolling_window.iloc[-1]
+            z_score = (latest_volume - mean) / std
+            if abs(z_score) >= ANOMALY_ZSCORE_THRESHOLD:
+                anomalies.append({
+                    "anomaly_type": "Volume Spike",
+                    "value": z_score,
+                    "description": f"Volume Z-score of {z_score:.2f} exceeds threshold ({ANOMALY_ZSCORE_THRESHOLD}). Current Volume: {latest_volume:,.2f}",
+                })
+
+    # Price Jump Detection (% change)
+    if 'close' in df.columns and len(df) >= 2:
+        df['price_pct_change'] = df['close'].pct_change()
+        latest_change = df['price_pct_change'].iloc[-1]
+
+        if pd.notna(latest_change) and abs(latest_change) >= ANOMALY_PRICE_JUMP_THRESHOLD:
+            anomalies.append({
+                "anomaly_type": "Price Jump",
+                "value": latest_change * 100,
+                "description": f"Price changed by {latest_change:.2%}, exceeding threshold of {ANOMALY_PRICE_JUMP_THRESHOLD:.2%}.",
+            })
+
+    return anomalies
+
 # --- MAIN RUNNER ---
 def run_analytics():
     """Main function to run all analytics for all configured tokens."""
@@ -126,7 +184,6 @@ def run_analytics():
         print(f"--- Processing analytics for {symbol} ---")
         try:
             token_id = get_token_id(conn, symbol)
-
             lookback_time = (datetime.now(timezone.utc) - timedelta(hours=DATA_LOOKBACK_HOURS)).isoformat()
             query = "SELECT * FROM prices WHERE token_id = ? AND timestamp >= ? ORDER BY timestamp ASC"
             df = pd.read_sql_query(query, conn, params=(token_id, lookback_time))
@@ -138,18 +195,27 @@ def run_analytics():
             # Prepare DataFrame: 'ta' needs a 'close' column
             df.rename(columns={'price_usd': 'close'}, inplace=True)
 
+            # Technical Indicators
             indicators = calculate_technical_indicators(df.copy())
             if indicators:
                 insert_indicators(conn, token_id, indicators)
                 print(f"Successfully calculated and stored indicators for {symbol}.")
 
-            # Rename back to original for arbitrage detection
+            # Arbitrage
             df.rename(columns={'close': 'price_usd'}, inplace=True)
             arbitrage_opps = detect_arbitrage(df)
             if arbitrage_opps:
                 for opp in arbitrage_opps:
                     insert_arbitrage(conn, token_id, opp)
-                print(f"Found and stored {len(arbitrage_opps)} arbitrage opportunity for {symbol}.")
+                print(f"Found and stored {len(arbitrage_opps)} arbitrage opportunities for {symbol}.")
+
+            # Anomalies
+            df.rename(columns={'price_usd': 'close'}, inplace=True)  # back to close for anomaly check
+            anomalies_found = detect_anomalies(df.copy())
+            if anomalies_found:
+                for anomaly in anomalies_found:
+                    insert_anomaly(conn, token_id, anomaly)
+                print(f"Found and stored {len(anomalies_found)} anomalies for {symbol}.")
 
         except Exception as e:
             print(f"An error occurred while processing {symbol}: {e}")
