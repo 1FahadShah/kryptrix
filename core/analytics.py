@@ -10,7 +10,7 @@ import numpy as np
 
 # Add project root to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from config import DB_PATH, TOKENS
+from config import DB_PATH, TOKENS, SOURCES # <-- IMPORT SOURCES
 
 # --- CONFIGURATION ---
 DATA_LOOKBACK_HOURS = 72
@@ -100,7 +100,12 @@ def calculate_technical_indicators(df: pd.DataFrame) -> dict:
 def detect_arbitrage(df: pd.DataFrame) -> list:
     """Detects arbitrage opportunities from the latest prices across different sources."""
     opportunities = []
-    latest = df.sort_values('timestamp').drop_duplicates('source', keep='last')
+
+    # --- FIX: Filter for executable exchanges ONLY ---
+    exchange_names = [name for name, props in SOURCES.items() if props.get('is_exchange', False)]
+    df_exchanges = df[df['source'].isin(exchange_names)]
+
+    latest = df_exchanges.sort_values('timestamp').drop_duplicates('source', keep='last')
 
     if len(latest) < 2:
         return []
