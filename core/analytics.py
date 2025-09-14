@@ -32,14 +32,15 @@ def get_token_id(conn, symbol):
     """Fetches the ID for a given token symbol."""
     return conn.execute("SELECT id FROM tokens WHERE symbol = ?", (symbol,)).fetchone()['id']
 
-def insert_indicators(conn, token_id, indicators):
-    """Inserts the latest calculated indicators into the database."""
+def insert_indicators(conn, token_id, indicators, timestamp):
+    """Inserts the latest calculated indicators into the database with the correct timestamp."""
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO indicators (token_id, sma10, sma30, ema, rsi14, vwap24h, realized_vol, raw_data)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO indicators (token_id, timestamp, sma10, sma30, ema, rsi14, vwap24h, realized_vol, raw_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         token_id,
+        timestamp,
         indicators.get('SMA_10'),
         indicators.get('SMA_30'),
         indicators.get('EMA_14'),
@@ -83,19 +84,25 @@ def insert_anomaly(conn, token_id, anomaly):
     conn.commit()
 
 # --- ANALYTICS FUNCTIONS ---
-def calculate_technical_indicators(df: pd.DataFrame) -> dict:
-    """Calculates a set of technical indicators using the 'ta' library."""
+def calculate_technical_indicators(df: pd.DataFrame) -> tuple:
+    """Calculates a set of technical indicators and returns them with the latest timestamp."""
     if df.empty or len(df) < 30:
         print("Warning: Not enough data points to calculate all indicators.")
-        return {}
+        return {}, None
 
     df['SMA_10'] = ta.trend.sma_indicator(df['close'], window=10)
     df['SMA_30'] = ta.trend.sma_indicator(df['close'], window=30)
     df['EMA_14'] = ta.trend.ema_indicator(df['close'], window=14)
     df['RSI_14'] = ta.momentum.rsi(df['close'], window=14)
 
-    latest_indicators = df.iloc[-1].to_dict()
-    return {k: v for k, v in latest_indicators.items() if pd.notna(v)}
+    latest_row = df.iloc[-1]
+    latest_indicators = latest_row.to_dict()
+    latest_timestamp = latest_row['timestamp']
+
+    # Clean up the indicators dict
+    indicators_only = {k: v for k, v in latest_indicators.items() if pd.notna(v) and k not in ['timestamp', 'close']}
+
+    return indicators_only, latest_timestamp
 
 def detect_arbitrage(df: pd.DataFrame) -> list:
     """Detects arbitrage opportunities from the latest prices across different sources."""
@@ -182,51 +189,54 @@ def detect_anomalies(df: pd.DataFrame) -> list:
 def run_analytics():
     """Main function to run all analytics for all configured tokens."""
     print("Starting analytics engine...")
-    conn = get_db_connection()
+    conn = None
+    try:
+        conn = get_db_connection()
+        for token_config in TOKENS:
+            symbol = token_config['symbol']
+            print(f"--- Processing analytics for {symbol} ---")
+            try:
+                token_id = get_token_id(conn, symbol)
+                lookback_time = (datetime.now(timezone.utc) - timedelta(hours=DATA_LOOKBACK_HOURS)).isoformat()
+                query = "SELECT * FROM prices WHERE token_id = ? AND timestamp >= ? ORDER BY timestamp ASC"
+                df = pd.read_sql_query(query, conn, params=(token_id, lookback_time))
 
-    for token_config in TOKENS:
-        symbol = token_config['symbol']
-        print(f"--- Processing analytics for {symbol} ---")
-        try:
-            token_id = get_token_id(conn, symbol)
-            lookback_time = (datetime.now(timezone.utc) - timedelta(hours=DATA_LOOKBACK_HOURS)).isoformat()
-            query = "SELECT * FROM prices WHERE token_id = ? AND timestamp >= ? ORDER BY timestamp ASC"
-            df = pd.read_sql_query(query, conn, params=(token_id, lookback_time))
+                if df.empty:
+                    print(f"No recent price data found for {symbol}. Skipping.")
+                    continue
 
-            if df.empty:
-                print(f"No recent price data found for {symbol}. Skipping.")
-                continue
+                # Keep a copy of the original dataframe before renaming columns
+                df_original = df.copy()
 
-            # Prepare DataFrame: 'ta' needs a 'close' column
-            df.rename(columns={'price_usd': 'close'}, inplace=True)
+                # Prepare DataFrame for TA library: 'ta' needs a 'close' column
+                df.rename(columns={'price_usd': 'close'}, inplace=True)
 
-            # Technical Indicators
-            indicators = calculate_technical_indicators(df.copy())
-            if indicators:
-                insert_indicators(conn, token_id, indicators)
-                print(f"Successfully calculated and stored indicators for {symbol}.")
+                # Technical Indicators
+                indicators, latest_timestamp = calculate_technical_indicators(df.copy())
+                if indicators:
+                    insert_indicators(conn, token_id, indicators, latest_timestamp)
+                    print(f"Successfully calculated and stored indicators for {symbol}.")
 
-            # Arbitrage
-            df.rename(columns={'close': 'price_usd'}, inplace=True)
-            arbitrage_opps = detect_arbitrage(df)
-            if arbitrage_opps:
-                for opp in arbitrage_opps:
-                    insert_arbitrage(conn, token_id, opp)
-                print(f"Found and stored {len(arbitrage_opps)} arbitrage opportunities for {symbol}.")
+                # Arbitrage (use the original dataframe with 'price_usd')
+                arbitrage_opps = detect_arbitrage(df_original)
+                if arbitrage_opps:
+                    for opp in arbitrage_opps:
+                        insert_arbitrage(conn, token_id, opp)
+                    print(f"Found and stored {len(arbitrage_opps)} arbitrage opportunities for {symbol}.")
 
-            # Anomalies
-            df.rename(columns={'price_usd': 'close'}, inplace=True)  # back to close for anomaly check
-            anomalies_found = detect_anomalies(df.copy())
-            if anomalies_found:
-                for anomaly in anomalies_found:
-                    insert_anomaly(conn, token_id, anomaly)
-                print(f"Found and stored {len(anomalies_found)} anomalies for {symbol}.")
+                # Anomalies (use the original dataframe and the one with 'close')
+                anomalies_found = detect_anomalies(df.copy())
+                if anomalies_found:
+                    for anomaly in anomalies_found:
+                        insert_anomaly(conn, token_id, anomaly)
+                    print(f"Found and stored {len(anomalies_found)} anomalies for {symbol}.")
 
-        except Exception as e:
-            print(f"An error occurred while processing {symbol}: {e}")
-
-    conn.close()
-    print("\nAnalytics engine run complete.")
+            except Exception as e:
+                print(f"An error occurred while processing {symbol}: {e}")
+    finally:
+        if conn:
+            conn.close()
+        print("\nAnalytics engine run complete.")
 
 if __name__ == "__main__":
     run_analytics()

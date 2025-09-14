@@ -65,7 +65,7 @@ def create_tables(conn):
         CREATE TABLE IF NOT EXISTS indicators (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             token_id INTEGER NOT NULL,
-            timestamp DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            timestamp DATETIME NOT NULL,
             sma10 REAL,
             sma30 REAL,
             ema REAL,
