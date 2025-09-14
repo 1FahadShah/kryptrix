@@ -19,8 +19,8 @@ def main():
     # --- Page Routing ---
     if page == "KPI Dashboard":
         st.title("📈 KPI Dashboard")
-        # kpi_view.render_kpi_view() # We will uncomment this later
-        st.write("KPI View will be built here.")
+        kpi_view.render_kpi_view() # We will uncomment this later
+        # st.write("KPI View will be built here.")
 
     elif page == "Trading Analytics":
         st.title("💹 Trading Analytics")
