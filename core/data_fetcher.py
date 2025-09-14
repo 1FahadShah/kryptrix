@@ -26,9 +26,6 @@ from config import (
 
 # ---------------- Database Helpers ----------------
 def create_connection(db_path=DB_PATH) -> Optional[sqlite3.Connection]:
-    # This function is now slightly redundant with database_setup.py,
-    # but it's fine to keep it here for this module's self-sufficiency.
-    # In a larger app, you might create a shared db connection manager.
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     try:
         conn = sqlite3.connect(db_path)
@@ -39,7 +36,6 @@ def create_connection(db_path=DB_PATH) -> Optional[sqlite3.Connection]:
         return None
 
 def insert_price(conn: sqlite3.Connection, token_id: int, source: str, price_usd: float, volume_24h: float, raw_data: dict):
-    # Added 'source' to the prices table to track where the data came from
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -49,8 +45,6 @@ def insert_price(conn: sqlite3.Connection, token_id: int, source: str, price_usd
         conn.commit()
     except Error as e:
         print(f"[DB INSERT ERROR] {e}")
-
-# The rest of the database helpers (log_api_health, get_token_id) remain the same...
 
 def log_api_health(conn: sqlite3.Connection, source: str, status: str, response_time_ms: float = None,
                    error_message: str = None, raw_data: dict = None):
@@ -178,7 +172,6 @@ async def fetch_uniswap_v3(client: httpx.AsyncClient, token: Dict, conn: sqlite3
             if "error" not in data and data.get("data", {}).get("pools"):
                 pools = data["data"]["pools"]
                 if not pools:
-                    # This handles cases where the API returns an empty pool list
                     raise ValueError(f"No pools found for {token['symbol']} in Uniswap response.")
 
                 pool = pools[0]
@@ -232,19 +225,5 @@ async def fetch_all_prices(tokens: List[Dict] = TOKENS):
 # ---------------- Main ----------------
 if __name__ == "__main__":
     print("Running data fetcher as a standalone script...")
-    # Add a column to prices table to track source
-    # This is a one-time migration. A better approach is using a migration tool.
-    try:
-        conn = create_connection()
-        conn.execute("ALTER TABLE prices ADD COLUMN source TEXT;")
-        conn.commit()
-        print("Added 'source' column to 'prices' table.")
-        conn.close()
-    except sqlite3.OperationalError:
-        # Column likely already exists, which is fine.
-        pass
-    except Exception as e:
-        print(f"Could not alter table: {e}")
-
     asyncio.run(fetch_all_prices())
     print("Data fetcher run complete.")

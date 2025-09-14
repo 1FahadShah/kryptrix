@@ -44,11 +44,12 @@ def create_tables(conn):
         """
         cursor.execute(tables['tokens'])
 
-        # Prices table
+        # Prices table - CORRECTED
         tables['prices'] = """
         CREATE TABLE IF NOT EXISTS prices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             token_id INTEGER NOT NULL,
+            source TEXT NOT NULL,
             timestamp DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
             price_usd REAL,
             volume_24h REAL,
