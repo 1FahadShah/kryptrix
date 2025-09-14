@@ -6,7 +6,7 @@ from core.analytics import run_analytics
 from database.database_setup import initialize_db
 
 # --- CONFIGURATION ---
-RUN_INTERVAL_SECONDS = 15
+RUN_INTERVAL_SECONDS = 30
 
 # --- NEW HELPER FUNCTION ---
 def live_countdown(duration_seconds: int):
