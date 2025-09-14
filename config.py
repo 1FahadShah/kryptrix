@@ -47,3 +47,11 @@ COINGECKO_API_URL = "https://api.coingecko.com/api/v3"
 # --- Use the API Key to build the official, reliable Uniswap URL ---
 UNISWAP_SUBGRAPH_ID = "5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV" # The ID you found
 UNISWAP_V3_SUBGRAPH_URL = f"https://gateway.thegraph.com/api/{THE_GRAPH_API_KEY}/subgraphs/id/{UNISWAP_SUBGRAPH_ID}"
+
+
+# ------------------ Feature Simulation Config ------------------
+# A simple constant representing how sensitive trade volume is to fee changes.
+# 0.5 means a 10% fee increase might lead to a 5% volume decrease.
+SIMULATION_ELASTICITY_CONSTANT = 0.5
+# The baseline fee our exchange charges, for revenue calculations (e.g., 0.1%)
+SIMULATION_BASE_FEE_PERCENT = 0.1
