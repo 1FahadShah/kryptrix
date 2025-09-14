@@ -15,6 +15,13 @@ if not THE_GRAPH_API_KEY:
 DB_DIR = "database"
 DB_PATH = os.path.join(DB_DIR, "kryptrix.db")
 
+# ------------------ Source Configuration (NEW) ------------------
+# Define which sources are actual, tradable exchanges
+SOURCES = {
+    "Binance": {"is_exchange": True},
+    "UniswapV3": {"is_exchange": True},
+    "CoinGecko": {"is_exchange": False} # This is a data aggregator
+}
 
 # ------------------ Token Config ------------------
 TOKENS = [

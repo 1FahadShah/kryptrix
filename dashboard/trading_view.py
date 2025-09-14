@@ -22,7 +22,12 @@ def fetch_trading_data(token_symbol: str):
 
     # Get token_id from symbol
     token_id_query = "SELECT id FROM tokens WHERE symbol = ?"
-    token_id = pd.read_sql_query(token_id_query, conn, params=(token_symbol,)).iloc[0, 0]
+    token_id_df = pd.read_sql_query(token_id_query, conn, params=(token_symbol,))
+    if token_id_df.empty:
+        conn.close()
+        return pd.DataFrame()
+    token_id = token_id_df.iloc[0, 0]
+
 
     # Fetch prices and indicators
     prices_query = """
@@ -32,6 +37,9 @@ def fetch_trading_data(token_symbol: str):
     ORDER BY timestamp
     """
     df_prices = pd.read_sql_query(prices_query, conn, params=(token_id,))
+    if df_prices.empty:
+        conn.close()
+        return pd.DataFrame()
     df_prices['timestamp'] = pd.to_datetime(df_prices['timestamp'])
 
     indicators_query = """
@@ -41,10 +49,16 @@ def fetch_trading_data(token_symbol: str):
     ORDER BY timestamp
     """
     df_indicators = pd.read_sql_query(indicators_query, conn, params=(token_id,))
-    df_indicators['timestamp'] = pd.to_datetime(df_indicators['timestamp'])
-
-    # Merge the dataframes based on the timestamp
-    df_merged = pd.merge(df_prices, df_indicators, on='timestamp', how='left')
+    if not df_indicators.empty:
+        df_indicators['timestamp'] = pd.to_datetime(df_indicators['timestamp'])
+        # Merge the dataframes based on the timestamp
+        df_merged = pd.merge(df_prices, df_indicators, on='timestamp', how='left')
+    else:
+        # If no indicators, just use price data and create empty columns for indicators
+        df_merged = df_prices
+        df_merged['sma10'] = None
+        df_merged['sma30'] = None
+        df_merged['ema'] = None
 
     conn.close()
     return df_merged
@@ -63,9 +77,13 @@ def render_trading_view():
             with st.spinner(f"Loading data for {selected_token}..."):
                 df = fetch_trading_data(selected_token)
 
-            if df.empty:
-                st.warning("Not enough historical data available to generate a chart.")
+            # --- FIX: Improved check for data and indicators ---
+            if df.empty or df['price_usd'].isnull().all():
+                st.warning("Not enough historical price data available. Please run the seeder or data fetcher script.")
                 return
+
+            if df['sma10'].isnull().all():
+                 st.info("Indicator data not yet calculated. Run the analytics engine (`core/analytics.py`) to see SMA/EMA lines.")
 
             # --- Interactive Chart ---
             fig = go.Figure()
@@ -77,26 +95,29 @@ def render_trading_view():
                 line=dict(color='blue', width=2)
             ))
 
-            # SMA10 Line
-            fig.add_trace(go.Scatter(
-                x=df['timestamp'], y=df['sma10'],
-                mode='lines', name='SMA 10',
-                line=dict(color='orange', width=1, dash='dot')
-            ))
+            # SMA10 Line (only if data exists)
+            if not df['sma10'].isnull().all():
+                fig.add_trace(go.Scatter(
+                    x=df['timestamp'], y=df['sma10'],
+                    mode='lines', name='SMA 10',
+                    line=dict(color='orange', width=1, dash='dot')
+                ))
 
-            # SMA30 Line
-            fig.add_trace(go.Scatter(
-                x=df['timestamp'], y=df['sma30'],
-                mode='lines', name='SMA 30',
-                line=dict(color='green', width=1, dash='dot')
-            ))
+            # SMA30 Line (only if data exists)
+            if not df['sma30'].isnull().all():
+                fig.add_trace(go.Scatter(
+                    x=df['timestamp'], y=df['sma30'],
+                    mode='lines', name='SMA 30',
+                    line=dict(color='green', width=1, dash='dot')
+                ))
 
-            # EMA Line
-            fig.add_trace(go.Scatter(
-                x=df['timestamp'], y=df['ema'],
-                mode='lines', name='EMA 14',
-                line=dict(color='red', width=1, dash='dash')
-            ))
+            # EMA Line (only if data exists)
+            if not df['ema'].isnull().all():
+                fig.add_trace(go.Scatter(
+                    x=df['timestamp'], y=df['ema'],
+                    mode='lines', name='EMA 14',
+                    line=dict(color='red', width=1, dash='dash')
+                ))
 
             fig.update_layout(
                 title=f'{selected_token}/USD Price and Technical Indicators',

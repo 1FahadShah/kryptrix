@@ -71,8 +71,9 @@ def render_feature_view():
             with st.spinner("Running simulation..."):
                 volume_data = fetch_volume_data(selected_token)
 
+                # --- FIX: Improved warning message ---
                 if volume_data.empty:
-                    st.error(f"Not enough historical volume data for {selected_token} to run a simulation.")
+                    st.error(f"Not enough historical volume data for {selected_token}. Please run the seeder or data fetcher script.")
                     return
 
                 result = simulate_fee_change_impact(volume_data, fee_change)
@@ -91,7 +92,7 @@ def render_feature_view():
                             delta=f"${result['delta']:,.2f}"
                         )
                     with res_col3:
-                         st.metric(
+                        st.metric(
                             label="Scenario",
                             value=result['scenario_name']
                         )
