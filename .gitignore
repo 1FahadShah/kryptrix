@@ -4,3 +4,20 @@
 # Python virtual environment
 venv/
 __pycache__/
+
+# Virtual environment
+venv/
+
+# Database files
+database/
+*.db
+
+# Generated reports
+reports/
+
+# IDE folders
+.vscode/
+.idea/
+
+# Environment variables
+.env
