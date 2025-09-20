@@ -5,7 +5,7 @@ colorFrom: blue
 colorTo: green
 sdk: streamlit
 sdk_version: "1.49.1"
-app_file: run.sh
+app_file: run.py
 pinned: false
 ---
 
