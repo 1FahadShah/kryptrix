@@ -28,6 +28,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # ✅ Step 3a: Set environment variables for tests
+      - name: Set environment variables
+        run: |
+          echo "THE_GRAPH_API_KEY=${{ secrets.THE_GRAPH_API_KEY }}" >> $GITHUB_ENV
+
       # ✅ Step 4: Run tests
       - name: Run tests
         run: |
