@@ -54,12 +54,10 @@ def simulate_fee_change_impact(
 
     # --- 1. Calculate Baseline Metrics ---
     avg_daily_volume = historical_volume_data.mean()
-    baseline_fee = SIMULATION_BASE_FEE_PERCENT / 100 # Convert percentage to decimal
+    baseline_fee = SIMULATION_BASE_FEE_PERCENT / 100
     baseline_revenue = avg_daily_volume * baseline_fee
 
     # --- 2. Model the Impact on Volume (Elasticity) ---
-    # This is a simplified model. A real-world model would be much more complex.
-    # It assumes a linear relationship between fee changes and volume changes.
     percent_change_in_fee = proposed_fee_change_percent / SIMULATION_BASE_FEE_PERCENT
     percent_change_in_volume = -SIMULATION_ELASTICITY_CONSTANT * percent_change_in_fee
     simulated_volume = avg_daily_volume * (1 + percent_change_in_volume)
@@ -78,8 +76,9 @@ def simulate_fee_change_impact(
     else:
         recommendation = "Neutral Impact: No significant revenue change projected."
 
+    # --- FIX: Format the output for a clean display ---
     result = {
-        "scenario_name": f"Fee Change from {SIMULATION_BASE_FEE_PERCENT}% to {new_fee_percent}%",
+        "scenario_name": f"Fee Change from {SIMULATION_BASE_FEE_PERCENT:.3f}% to {new_fee_percent:.3f}%",
         "baseline_revenue": baseline_revenue,
         "simulated_revenue": simulated_revenue,
         "delta": delta,
