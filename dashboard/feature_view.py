@@ -17,22 +17,28 @@ def get_db_connection():
 
 @st.cache_data(ttl=300) # Cache for 5 minutes
 def fetch_volume_data(token_symbol: str):
-    """Fetches historical 24h volume data for a specific token."""
+    """
+    Fetches historical 24h volume data for a specific token using a single, robust JOIN query.
+    """
     conn = get_db_connection()
 
-    # Get token_id from symbol
-    token_id_query = "SELECT id FROM tokens WHERE symbol = ?"
-    token_id_df = pd.read_sql_query(token_id_query, conn, params=(token_symbol,))
-    if token_id_df.empty:
+    # --- NEW: A single, more reliable query using a JOIN ---
+    query = """
+        SELECT p.volume_24h
+        FROM prices p
+        JOIN tokens t ON p.token_id = t.id
+        WHERE t.symbol = ?
+          AND p.source = 'Binance'
+          AND p.volume_24h IS NOT NULL
+    """
+    try:
+        df_volume = pd.read_sql_query(query, conn, params=(token_symbol,))
+    except Exception as e:
+        st.error(f"Database query failed: {e}")
+        df_volume = pd.DataFrame({'volume_24h': []}) # Return empty dataframe on error
+    finally:
         conn.close()
-        return pd.Series(dtype='float64') # Return empty series if token not found
-    token_id = token_id_df.iloc[0, 0]
 
-    # Fetch volume data
-    volume_query = "SELECT volume_24h FROM prices WHERE token_id = ?"
-    df_volume = pd.read_sql_query(volume_query, conn, params=(token_id,))
-
-    conn.close()
     return df_volume['volume_24h']
 
 def render_feature_view():
