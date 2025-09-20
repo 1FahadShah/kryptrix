@@ -8,19 +8,20 @@ from database.database_setup import initialize_db
 # --- CONFIGURATION ---
 RUN_INTERVAL_SECONDS = 30
 
-# --- NEW HELPER FUNCTION ---
-def live_countdown(duration_seconds: int):
+# --- NEW ASYNC HELPER FUNCTION ---
+async def live_countdown(duration_seconds: int):
     """
-    Displays a live, overwriting countdown in the terminal for the specified duration.
+    Displays a live, non-blocking countdown in the terminal.
     """
     for i in range(duration_seconds, 0, -1):
-        # The \r moves the cursor to the beginning of the line.
-        # The end="" prevents print from adding a new line.
-        # Padding with spaces ensures the previous line is fully overwritten.
         print(f"Next run in {i} seconds...          \r", end="")
-        time.sleep(1)
-    # Print a blank line to clear the countdown text at the end
-    print(" " * 40, end="\r")
+        try:
+            # Non-blocking sleep
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            # Allows clean cancellation
+            break
+    print(" " * 40, end="\r")  # Clear the countdown line
 
 async def main_loop():
     """
@@ -47,10 +48,10 @@ async def main_loop():
         run_analytics()
         print("Analytics engine run complete.")
 
-        # --- Wait for the next run with a live countdown ---
+        # --- Wait for the next run with a live async countdown ---
         print(f"--- Pipeline run finished. ---")
         print("===========================================")
-        live_countdown(RUN_INTERVAL_SECONDS) # <--- UPDATED CALL
+        await live_countdown(RUN_INTERVAL_SECONDS)  # <--- ASYNC CALL
 
         print("-" * 30)
 
@@ -58,4 +59,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main_loop())
     except KeyboardInterrupt:
-        print("\n👋 Application shutting down. Goodbye!")
+        # Instant shutdown now works
+        print("\n👋 Application shutting down gracefully. Goodbye!")
