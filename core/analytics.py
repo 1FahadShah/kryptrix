@@ -1,6 +1,6 @@
 # core/analytics.py
 import pandas as pd
-import ta  # <--- NEW LIBRARY
+import ta
 import sqlite3
 import json
 import sys
@@ -10,16 +10,16 @@ import numpy as np
 
 # Add project root to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from config import DB_PATH, TOKENS, SOURCES # <-- IMPORT SOURCES
+from config import DB_PATH, TOKENS, SOURCES
 
 # --- CONFIGURATION ---
 DATA_LOOKBACK_HOURS = 72
 ARBITRAGE_THRESHOLD = 0.001  # 0.1%
 
-# --- NEW: Anomaly Detection Configuration ---
-ANOMALY_ZSCORE_WINDOW = 24  # Use the last 24 data points for Z-score calculation
-ANOMALY_ZSCORE_THRESHOLD = 3.0  # Z-score above this is a volume spike
-ANOMALY_PRICE_JUMP_THRESHOLD = 0.05  # 5% price change in one period is a price jump
+# --- Anomaly Detection Configuration ---
+ANOMALY_ZSCORE_WINDOW = 24
+ANOMALY_ZSCORE_THRESHOLD = 3.0
+ANOMALY_PRICE_JUMP_THRESHOLD = 0.05
 
 # --- DATABASE HELPERS ---
 def get_db_connection():
@@ -32,23 +32,54 @@ def get_token_id(conn, symbol):
     """Fetches the ID for a given token symbol."""
     return conn.execute("SELECT id FROM tokens WHERE symbol = ?", (symbol,)).fetchone()['id']
 
-def insert_indicators(conn, token_id, indicators, timestamp):
-    """Inserts the latest calculated indicators into the database with the correct timestamp."""
+# --- MODIFIED: This function now handles bulk insertion ---
+def insert_indicators(conn, token_id, df_indicators: pd.DataFrame):
+    """
+    Efficiently bulk-inserts a DataFrame of indicator data into the database.
+    This function now expects a DataFrame, not a dictionary.
+    """
+    if df_indicators.empty:
+        return
+
+    # Prepare the DataFrame for SQL insertion
+    df_to_insert = df_indicators[['timestamp', 'SMA_10', 'SMA_30', 'EMA_14', 'RSI_14', 'VWAP_24h', 'Realized_Vol_30D']].copy()
+    df_to_insert.rename(columns={
+        'SMA_10': 'sma10',
+        'SMA_30': 'sma30',
+        'EMA_14': 'ema',
+        'RSI_14': 'rsi14',
+        'VWAP_24h': 'vwap24h',
+        'Realized_Vol_30D': 'realized_vol'
+    }, inplace=True)
+
+    df_to_insert['token_id'] = token_id
+
+    # Drop rows where essential indicators are all NaN
+    df_to_insert.dropna(subset=['sma10', 'sma30', 'ema', 'rsi14'], how='all', inplace=True)
+
+    if df_to_insert.empty:
+        return
+
+    # Use a temporary table for efficient upserting
+    df_to_insert.to_sql('temp_indicators', conn, if_exists='replace', index=False)
+
     cursor = conn.cursor()
+
+    # Use INSERT OR REPLACE to avoid duplicates and update existing rows
     cursor.execute("""
-        INSERT INTO indicators (token_id, timestamp, sma10, sma30, ema, rsi14, vwap24h, realized_vol, raw_data)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        token_id,
-        timestamp,
-        indicators.get('SMA_10'),
-        indicators.get('SMA_30'),
-        indicators.get('EMA_14'),
-        indicators.get('RSI_14'),
-        indicators.get('VWAP_24h'),
-        indicators.get('Realized_Vol_30D'),
-        json.dumps(indicators)
-    ))
+        INSERT OR REPLACE INTO indicators (token_id, timestamp, sma10, sma30, ema, rsi14, vwap24h, realized_vol)
+        SELECT
+            t.token_id,
+            t.timestamp,
+            t.sma10,
+            t.sma30,
+            t.ema,
+            t.rsi14,
+            t.vwap24h,
+            t.realized_vol
+        FROM temp_indicators t;
+    """)
+
     conn.commit()
 
 def insert_arbitrage(conn, token_id, opp):
@@ -67,7 +98,6 @@ def insert_arbitrage(conn, token_id, opp):
     ))
     conn.commit()
 
-# --- NEW: Anomaly Insertion Helper ---
 def insert_anomaly(conn, token_id, anomaly):
     """Inserts a detected anomaly into the database."""
     cursor = conn.cursor()
@@ -84,41 +114,30 @@ def insert_anomaly(conn, token_id, anomaly):
     conn.commit()
 
 # --- ANALYTICS FUNCTIONS ---
-def calculate_technical_indicators(df: pd.DataFrame) -> tuple:
-    """Calculates a set of technical indicators and returns them with the latest timestamp."""
+# --- MODIFIED: This function now returns the full DataFrame ---
+def calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculates a full set of technical indicators and returns the entire DataFrame.
+    """
     if df.empty or len(df) < 30:
         print("Warning: Not enough data points to calculate all indicators.")
-        return {}, None
+        return pd.DataFrame()
 
     df['SMA_10'] = ta.trend.sma_indicator(df['close'], window=10)
     df['SMA_30'] = ta.trend.sma_indicator(df['close'], window=30)
     df['EMA_14'] = ta.trend.ema_indicator(df['close'], window=14)
     df['RSI_14'] = ta.momentum.rsi(df['close'], window=14)
-    # Calculate VWAP (Volume Weighted Average Price)
     df['VWAP_24h'] = (df['close'] * df['volume_24h']).rolling(window=24, min_periods=1).sum() / df['volume_24h'].rolling(window=24, min_periods=1).sum()
-
-    # Calculate Realized Volatility (30-day annualized)
     df['log_returns'] = np.log(df['close'] / df['close'].shift(1))
     df['Realized_Vol_30D'] = df['log_returns'].rolling(window=30, min_periods=2).std() * np.sqrt(365)
 
-
-    latest_row = df.iloc[-1]
-    latest_indicators = latest_row.to_dict()
-    latest_timestamp = latest_row['timestamp']
-
-    # Clean up the indicators dict
-    indicators_only = {k: v for k, v in latest_indicators.items() if pd.notna(v) and k not in ['timestamp', 'close']}
-
-    return indicators_only, latest_timestamp
+    return df
 
 def detect_arbitrage(df: pd.DataFrame) -> list:
     """Detects arbitrage opportunities from the latest prices across different sources."""
     opportunities = []
-
-    # --- FIX: Filter for executable exchanges ONLY ---
     exchange_names = [name for name, props in SOURCES.items() if props.get('is_exchange', False)]
     df_exchanges = df[df['source'].isin(exchange_names)]
-
     latest = df_exchanges.sort_values('timestamp').drop_duplicates('source', keep='last')
 
     if len(latest) < 2:
@@ -153,7 +172,6 @@ def detect_arbitrage(df: pd.DataFrame) -> list:
             })
     return opportunities
 
-# --- NEW: Anomaly Detection Function ---
 def detect_anomalies(df: pd.DataFrame) -> list:
     """Detects volume spikes and price jumps from time-series data."""
     anomalies = []
@@ -212,17 +230,17 @@ def run_analytics():
                     print(f"No recent price data found for {symbol}. Skipping.")
                     continue
 
-                # Keep a copy of the original dataframe before renaming columns
                 df_original = df.copy()
-
-                # Prepare DataFrame for TA library: 'ta' needs a 'close' column
                 df.rename(columns={'price_usd': 'close'}, inplace=True)
 
-                # Technical Indicators
-                indicators, latest_timestamp = calculate_technical_indicators(df.copy())
-                if indicators:
-                    insert_indicators(conn, token_id, indicators, latest_timestamp)
-                    print(f"Successfully calculated and stored indicators for {symbol}.")
+                # --- MODIFIED: Technical Indicators Workflow ---
+                df_with_indicators = calculate_technical_indicators(df.copy())
+                if not df_with_indicators.empty:
+                    # Clear old indicators and bulk insert the full new set
+                    conn.execute("DELETE FROM indicators WHERE token_id = ?", (token_id,))
+                    insert_indicators(conn, token_id, df_with_indicators)
+                    print(f"Successfully calculated and stored {len(df_with_indicators)} indicator rows for {symbol}.")
+                # --- End of Modified Section ---
 
                 # Arbitrage (use the original dataframe with 'price_usd')
                 arbitrage_opps = detect_arbitrage(df_original)
@@ -231,7 +249,7 @@ def run_analytics():
                         insert_arbitrage(conn, token_id, opp)
                     print(f"Found and stored {len(arbitrage_opps)} arbitrage opportunities for {symbol}.")
 
-                # Anomalies (use the original dataframe and the one with 'close')
+                # Anomalies (use the dataframe with 'close')
                 anomalies_found = detect_anomalies(df.copy())
                 if anomalies_found:
                     for anomaly in anomalies_found:
