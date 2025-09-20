@@ -21,8 +21,6 @@ def fetch_volume_data(token_symbol: str):
     Fetches historical 24h volume data for a specific token using a single, robust JOIN query.
     """
     conn = get_db_connection()
-
-    # --- NEW: A single, more reliable query using a JOIN ---
     query = """
         SELECT p.volume_24h
         FROM prices p
@@ -35,10 +33,9 @@ def fetch_volume_data(token_symbol: str):
         df_volume = pd.read_sql_query(query, conn, params=(token_symbol,))
     except Exception as e:
         st.error(f"Database query failed: {e}")
-        df_volume = pd.DataFrame({'volume_24h': []}) # Return empty dataframe on error
+        df_volume = pd.DataFrame({'volume_24h': []})
     finally:
         conn.close()
-
     return df_volume['volume_24h']
 
 def render_feature_view():
@@ -50,58 +47,50 @@ def render_feature_view():
     in trading fees might impact trading volume and, consequently, overall revenue.
     """)
 
-    col1, col2 = st.columns([1, 2])
+    # --- FIX: Parameters are now in their own section for better mobile flow ---
+    st.subheader("Simulation Parameters")
+    token_symbols = [token['symbol'] for token in TOKENS]
+    selected_token = st.selectbox(
+        "Select a token to base the simulation on:",
+        token_symbols
+    )
 
-    with col1:
-        st.subheader("Simulation Parameters")
-        token_symbols = [token['symbol'] for token in TOKENS]
-        selected_token = st.selectbox(
-            "Select a token to base the simulation on:",
-            token_symbols
-        )
+    fee_change = st.slider(
+        "Proposed Fee Change (%)",
+        min_value=-0.05, max_value=0.05, value=0.01,
+        step=0.005, format="%.3f%%"
+    )
 
-        fee_change = st.slider(
-            "Proposed Fee Change (%)",
-            min_value=-0.05,
-            max_value=0.05,
-            value=0.01, # Default value
-            step=0.005,
-            format="%.3f%%"
-        )
+    run_button = st.button("Run Simulation")
 
-        run_button = st.button("Run Simulation")
+    st.markdown("---")
 
-    with col2:
-        st.subheader("Simulation Results")
-        if run_button:
-            with st.spinner("Running simulation..."):
-                volume_data = fetch_volume_data(selected_token)
+    # --- FIX: Results are in their own section ---
+    st.subheader("Simulation Results")
+    if run_button:
+        with st.spinner("Running simulation..."):
+            volume_data = fetch_volume_data(selected_token)
 
-                # --- FIX: Improved warning message ---
-                if volume_data.empty:
-                    st.error(f"Not enough historical volume data for {selected_token}. Please run the seeder or data fetcher script.")
-                    return
+            if volume_data.empty:
+                st.error(f"Not enough historical volume data for {selected_token}. Please run the seeder or data fetcher script.")
+                return
 
-                result = simulate_fee_change_impact(volume_data, fee_change)
+            result = simulate_fee_change_impact(volume_data, fee_change)
 
-                if result:
-                    res_col1, res_col2, res_col3 = st.columns(3)
-                    with res_col1:
-                        st.metric(
-                            label="Baseline Daily Revenue",
-                            value=f"${result['baseline_revenue']:,.2f}"
-                        )
-                    with res_col2:
-                        st.metric(
-                            label="Simulated Daily Revenue",
-                            value=f"${result['simulated_revenue']:,.2f}",
-                            delta=f"${result['delta']:,.2f}"
-                        )
-                    with res_col3:
-                        st.metric(
-                            label="Scenario",
-                            value=result['scenario_name']
-                        )
-                    st.success(result['recommendation'])
-                else:
-                    st.error("Failed to compute simulation results.")
+            if result:
+                res_col1, res_col2 = st.columns(2) # Use columns for metrics, which is mobile-friendly
+                with res_col1:
+                    st.metric(
+                        label="Baseline Daily Revenue",
+                        value=f"${result['baseline_revenue']:,.2f}"
+                    )
+                with res_col2:
+                    st.metric(
+                        label="Simulated Daily Revenue",
+                        value=f"${result['simulated_revenue']:,.2f}",
+                        delta=f"${result['delta']:,.2f}"
+                    )
+                st.success(f"**Scenario**: {result['scenario_name']}")
+                st.info(f"**Recommendation**: {result['recommendation']}")
+            else:
+                st.error("Failed to compute simulation results.")
