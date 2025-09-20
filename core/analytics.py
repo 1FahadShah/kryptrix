@@ -45,8 +45,8 @@ def insert_indicators(conn, token_id, indicators, timestamp):
         indicators.get('SMA_30'),
         indicators.get('EMA_14'),
         indicators.get('RSI_14'),
-        None,  # VWAP temporarily removed
-        None,  # Realized Volatility temporarily removed
+        indicators.get('VWAP_24h'),
+        indicators.get('Realized_Vol_30D'),
         json.dumps(indicators)
     ))
     conn.commit()
@@ -94,6 +94,13 @@ def calculate_technical_indicators(df: pd.DataFrame) -> tuple:
     df['SMA_30'] = ta.trend.sma_indicator(df['close'], window=30)
     df['EMA_14'] = ta.trend.ema_indicator(df['close'], window=14)
     df['RSI_14'] = ta.momentum.rsi(df['close'], window=14)
+    # Calculate VWAP (Volume Weighted Average Price)
+    df['VWAP_24h'] = (df['close'] * df['volume_24h']).rolling(window=24, min_periods=1).sum() / df['volume_24h'].rolling(window=24, min_periods=1).sum()
+
+    # Calculate Realized Volatility (30-day annualized)
+    df['log_returns'] = np.log(df['close'] / df['close'].shift(1))
+    df['Realized_Vol_30D'] = df['log_returns'].rolling(window=30, min_periods=2).std() * np.sqrt(365)
+
 
     latest_row = df.iloc[-1]
     latest_indicators = latest_row.to_dict()
