@@ -7,13 +7,11 @@ import atexit
 
 bg_process = None
 
-
 def cleanup():
     """Ensure background process is terminated on script exit."""
     global bg_process
     if bg_process and bg_process.poll() is None:
         print("\n🛑 Terminating background data pipeline...")
-        # On Unix-like systems (like Hugging Face), os.kill is more reliable
         try:
             os.kill(bg_process.pid, signal.SIGTERM)
             bg_process.wait(timeout=5)
@@ -22,26 +20,26 @@ def cleanup():
             bg_process.kill()
         print("✅ Pipeline terminated.")
 
-
-def run_command(command, description):
-    """Runs a setup command and exits if it fails."""
+def run_command(command_args, description):
+    """Runs a setup command using its file path and exits if it fails."""
     print(f"🚀 {description}...")
-    # Use sys.executable to ensure we use the python from the correct venv
-    result = subprocess.run([sys.executable, "-m", command], capture_output=True, text=True)
-    if result.returncode != 0:
+    try:
+        # --- FIX IS HERE: We now run the script by its file path directly ---
+        result = subprocess.run(
+            [sys.executable] + command_args, check=True, capture_output=True, text=True
+        )
+        print(f"✅ {description} complete.")
+    except subprocess.CalledProcessError as e:
         print(f"❌ ERROR: {description} failed.")
-        print(result.stderr)
-        sys.exit(result.returncode)
-    print(f"✅ {description} complete.")
-
+        print(e.stderr) # Print the actual error from the script
+        sys.exit(1)
 
 def main():
-    # Register the cleanup function to be called on any script exit
     atexit.register(cleanup)
 
-    # Initialize and Seed
-    run_command("database/database_setup.py", "Initializing database")
-    run_command("scripts/seed_db.py", "Seeding initial data")
+    # --- FIX IS HERE: We pass the file paths as a list ---
+    run_command(["database/database_setup.py"], "Initializing database")
+    run_command(["scripts/seed_db.py"], "Seeding initial data")
 
     # Start the background data pipeline
     print("📡 Starting background data pipeline...")
@@ -49,13 +47,15 @@ def main():
     bg_process = subprocess.Popen([sys.executable, "main.py"])
     print(f"✅ Data pipeline started with PID: {bg_process.pid}")
 
-    # Start the Streamlit app (this is the main blocking process)
+    # Start the Streamlit app
     print("📊 Starting Streamlit dashboard...")
-
-    subprocess.run(
-        ["streamlit", "run", "app.py", "--server.port", "8501", "--server.headless", "true"]
-    )
-
+    try:
+        subprocess.run(
+            ["streamlit", "run", "app.py", "--server.port", "8501", "--server.headless", "true"],
+            check=True
+        )
+    finally:
+        cleanup()
 
 if __name__ == "__main__":
     main()
