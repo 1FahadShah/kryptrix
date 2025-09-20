@@ -7,6 +7,7 @@ import atexit
 
 bg_process = None
 
+
 def cleanup():
     """Ensure background process is terminated on script exit."""
     global bg_process
@@ -21,6 +22,7 @@ def cleanup():
             bg_process.kill()
         print("✅ Pipeline terminated.")
 
+
 def run_command(command, description):
     """Runs a setup command and exits if it fails."""
     print(f"🚀 {description}...")
@@ -32,13 +34,14 @@ def run_command(command, description):
         sys.exit(result.returncode)
     print(f"✅ {description} complete.")
 
+
 def main():
     # Register the cleanup function to be called on any script exit
     atexit.register(cleanup)
 
     # Initialize and Seed
-    run_command("database.database_setup", "Initializing database")
-    run_command("scripts.seed_db", "Seeding initial data")
+    run_command("database/database_setup.py", "Initializing database")
+    run_command("scripts/seed_db.py", "Seeding initial data")
 
     # Start the background data pipeline
     print("📡 Starting background data pipeline...")
@@ -48,8 +51,11 @@ def main():
 
     # Start the Streamlit app (this is the main blocking process)
     print("📊 Starting Streamlit dashboard...")
-    # Note: Hugging Face uses port 7860 by default. 8501 is fine for local.
-    subprocess.run(["streamlit", "run", "app.py", "--server.port", "8501", "--server.headless", "true"])
+
+    subprocess.run(
+        ["streamlit", "run", "app.py", "--server.port", "8501", "--server.headless", "true"]
+    )
+
 
 if __name__ == "__main__":
     main()
