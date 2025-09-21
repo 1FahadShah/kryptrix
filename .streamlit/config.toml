@@ -1,0 +1,4 @@
+[server]
+# Blacklist both the database and reports folders to prevent reloads
+# when the app writes files to them.
+folderWatchBlacklist = ["database", "reports"]

@@ -20,4 +20,4 @@ COPY --chown=appuser:appuser . .
 EXPOSE 8501
 
 # 7. Define the startup command
-CMD ["python", "run.py"]
+CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.headless=true"]
